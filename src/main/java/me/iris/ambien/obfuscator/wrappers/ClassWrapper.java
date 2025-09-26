@@ -1,44 +1,43 @@
 package me.iris.ambien.obfuscator.wrappers;
 
-import lombok.Getter;
-import lombok.Setter;
-import me.iris.ambien.obfuscator.Ambien;
-import me.iris.ambien.obfuscator.asm.CompetentClassWriter;
-import me.iris.ambien.obfuscator.builders.MethodBuilder;
-import org.objectweb.asm.ClassWriter;
-import org.objectweb.asm.Opcodes;
-import org.objectweb.asm.tree.ClassNode;
-import org.objectweb.asm.tree.FieldNode;
-import org.objectweb.asm.tree.InsnNode;
-import org.objectweb.asm.tree.MethodNode;
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
-@SuppressWarnings("CastCanBeRemovedNarrowingVariableType")
-public class ClassWrapper implements Opcodes {
-    @Getter
-    private final String name;
+import lombok.Getter;
+import lombok.Setter;
+import me.iris.ambien.obfuscator.Ambien;
+import me.iris.ambien.obfuscator.asm.CompetentClassWriter;
+import me.iris.ambien.obfuscator.builders.MethodBuilder;
+import me.iris.ambien.obfuscator.wrappers.MethodWrapper;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldNode;
+import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.MethodNode;
 
+import static org.objectweb.asm.Opcodes.ACC_STATIC;
+import static org.objectweb.asm.Opcodes.RETURN;
+
+public class ClassWrapper {
+    private final String name;
     @Getter
     @Setter
     private ClassNode node;
-
-    @Getter
     private final List<MethodWrapper> methods;
+    private final boolean isLibraryClass;
 
-    public ClassWrapper(String name, ClassNode node) {
+    public ClassWrapper(String name, ClassNode node, boolean isLibraryClass) {
         this.name = name;
         this.node = node;
-        this.methods = new ArrayList<>();
+        this.methods = new ArrayList<MethodWrapper>();
+        this.isLibraryClass = isLibraryClass;
+        Arrays.stream(node.methods.toArray()).map(methodObj -> (MethodNode)methodObj).forEach(methodNode -> this.methods.add(new MethodWrapper((MethodNode)methodNode)));
+    }
 
-        // Import methods from class
-        Arrays.stream(node.methods.toArray())
-                .map(methodObj -> (MethodNode)methodObj)
-                .forEach(methodNode -> methods.add(new MethodWrapper(methodNode)));
+    public List<MethodWrapper> getTransformableMethods() {
+        return this.methods.stream().filter(method -> !Ambien.get.exclusionManager.isMethodExcluded(this.name, method.getNode().name)).collect(Collectors.toList());
     }
 
     public MethodNode getStaticInitializer() {
@@ -65,56 +64,60 @@ public class ClassWrapper implements Opcodes {
         return methodNode;
     }
 
-    public List<MethodWrapper> getTransformableMethods() {
-        return methods.stream()
-                .filter(method -> !Ambien.get.exclusionManager.isMethodExcluded(name, method.getNode().name))
-                .collect(Collectors.toList());
-    }
-
     public boolean isInterface() {
-        return (node.access & Opcodes.ACC_INTERFACE) == Opcodes.ACC_INTERFACE;
+        return (this.node.access & 0x200) == 512;
     }
 
     public boolean isEnum() {
-        return (node.access & Opcodes.ACC_ENUM) == Opcodes.ACC_ENUM;
+        return (this.node.access & 0x4000) == 16384;
     }
 
     public CopyOnWriteArrayList<FieldNode> getFields() {
-        final CopyOnWriteArrayList<FieldNode> fields = new CopyOnWriteArrayList<>();
-        for (final Object fieldObj : node.fields) {
-            fields.add((FieldNode)fieldObj);
+        CopyOnWriteArrayList<FieldNode> fields = new CopyOnWriteArrayList<FieldNode>();
+        for (FieldNode fieldObj : this.node.fields) {
+            fields.add(fieldObj);
         }
-
         return fields;
     }
 
-    public void addField(final FieldNode fieldNode) {
-        node.fields.add(fieldNode);
+    public void addField(FieldNode fieldNode) {
+        this.node.fields.add(fieldNode);
     }
 
-    public void addMethod(final MethodNode methodNode) {
-        node.methods.add(methodNode);
-        methods.add(new MethodWrapper(methodNode));
+    public void addMethod(MethodNode methodNode) {
+        this.node.methods.add(methodNode);
+        this.methods.add(new MethodWrapper(methodNode));
     }
 
     public byte[] toByteArray() {
-        Ambien.LOGGER.debug("Converting class to bytes: {}", name);
-
+        Ambien.LOGGER.debug("Converting class to bytes: {}", (Object)this.name);
         try {
-            // Attempt to get bytes of class using COMPUTE_FRAMES
-            final CompetentClassWriter writer = new CompetentClassWriter(ClassWriter.COMPUTE_FRAMES);
-            node.accept(writer);
+            CompetentClassWriter writer = new CompetentClassWriter(2);
+            this.node.accept(writer);
             return writer.toByteArray();
-        } catch (TypeNotPresentException | ArrayIndexOutOfBoundsException | NegativeArraySizeException e) {
-            if (e instanceof NegativeArraySizeException)
-                Ambien.LOGGER.warn("NegativeArraySizeException thrown when attempting to write class \"{}\" using COMPUTE_MAXS, this is most likely caused by malformed bytecode.", name);
-            else
-                Ambien.LOGGER.warn("Attempting to write class \"{}\" using COMPUTE_MAXS, some errors may appear during runtime.", name);
-
-            // Attempt to get bytes of class using COMPUTE_MAXS
-            final CompetentClassWriter writer = new CompetentClassWriter(ClassWriter.COMPUTE_MAXS);
-            node.accept(writer);
+        }
+        catch (ArrayIndexOutOfBoundsException | NegativeArraySizeException | TypeNotPresentException e) {
+            if (e instanceof NegativeArraySizeException) {
+                Ambien.LOGGER.warn("NegativeArraySizeException thrown when attempting to write class \"{}\" using COMPUTE_MAXS, this is most likely caused by malformed bytecode.", (Object)this.name);
+            } else {
+                Ambien.LOGGER.warn("Attempting to write class \"{}\" using COMPUTE_MAXS, some errors may appear during runtime.", (Object)this.name);
+            }
+            CompetentClassWriter writer = new CompetentClassWriter(1);
+            this.node.accept(writer);
             return writer.toByteArray();
         }
     }
+
+    public String getName() {
+        return this.name;
+    }
+
+    public List<MethodWrapper> getMethods() {
+        return this.methods;
+    }
+
+    public boolean isLibraryClass() {
+        return this.isLibraryClass;
+    }
 }
+ 
